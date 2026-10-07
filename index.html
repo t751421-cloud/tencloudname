@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>十種雲形 リアルタイム対戦かるた</title>
+  <!-- 外部アカウント・APIキー不要のP2P通信ライブラリ -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    :root {
+      --primary: #0284c7;
+      --primary-hover: #0369a1;
+      --bg: #f0f9ff;
+      --card-bg: #ffffff;
+      --text: #1e293b;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Helvetica Neue', Arial, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 10px; }
+    
+    .container { max-width: 900px; margin: 0 auto; }
+    header { text-align: center; margin-bottom: 15px; }
+    h1 { color: var(--primary); font-size: 1.6rem; }
+    
+    /* 入室画面 */
+    #login-screen {
+      background: var(--card-bg);
+      padding: 25px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+      max-width: 400px;
+      margin: 20px auto;
+    }
+    .form-group { margin-bottom: 12px; }
+    label { display: block; font-weight: bold; margin-bottom: 4px; font-size: 0.85rem; }
+    input { width: 100%; padding: 8px 12px; border: 2px solid #cbd5e1; border-radius: 6px; font-size: 0.95rem; }
+    button {
+      width: 100%;
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 10px;
+      font-size: 0.95rem;
+      font-weight: bold;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: var(--primary-hover); }
+    
+    /* ゲーム画面 */
+    #game-screen { display: none; }
+    
+    .game-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--card-bg);
+      padding: 10px 15px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .room-info { font-weight: bold; font-size: 1rem; }
+    
+    /* スコアボード */
+    .scoreboard { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .player-card {
+      background: var(--card-bg);
+      padding: 6px 12px;
+      border-radius: 16px;
+      border: 2px solid #e2e8f0;
+      font-size: 0.85rem;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .player-card.active { border-color: var(--primary); background: #e0f2fe; }
+    .player-card.otetsuki { border-color: var(--danger); background: #fef2f2; color: var(--danger); }
+    .score-badge { background: var(--primary); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; }
+    
+    /* お手つきアラート */
+    #otetsuki-banner {
+      display: none;
+      background: #fee2e2;
+      color: #991b1b;
+      border: 2px solid #f87171;
+      padding: 8px;
+      border-radius: 8px;
+      text-align: center;
+      font-weight: bold;
+      font-size: 0.9rem;
+      margin-bottom: 10px;
+      animation: pulse 1s infinite alternate;
+    }
+    @keyframes pulse { from { opacity: 0.8; } to { opacity: 1; } }
+
+    /* 読み札表示エリア */
+    .yomi-box {
+      background: #fef3c7;
+      border: 3px solid #f59e0b;
+      padding: 15px;
+      border-radius: 10px;
+      text-align: center;
+      margin-bottom: 15px;
+    }
+    .yomi-text { font-size: 1.15rem; font-weight: bold; color: #78350f; line-height: 1.4; }
+    .sound-btn {
+      margin-top: 8px;
+      background: #f59e0b;
+      width: auto;
+      padding: 4px 12px;
+      font-size: 0.8rem;
+      display: inline-block;
+    }
+    
+    /* 札のフィールド */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+    @media (max-width: 650px) {
+      .cards-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    .karuta-card {
+      background: var(--card-bg);
+      border: 3px solid #38bdf8;
+      border-radius: 8px;
+      aspect-ratio: 3 / 4;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 6px;
+      cursor: pointer;
+      box-shadow: 0 3px 5px rgba(0,0,0,0.1);
+      user-select: none;
+    }
+    .karuta-card:hover { transform: translateY(-2px); }
+    .karuta-card.taken { opacity: 0.25; filter: grayscale(100%); cursor: not-allowed; border-color: #94a3b8; transform: none !important; }
+    .karuta-card.locked { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+    
+    .card-visual {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f0f9ff;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      overflow: hidden;
+    }
+    .card-visual svg { width: 100%; height: 100%; }
+    .card-title { text-align: center; font-weight: bold; font-size: 0.85rem; color: #0369a1; border-top: 1px solid #e2e8f0; padding-top: 2px; }
+    
+    /* ログ */
+    .log-box {
+      background: #1e293b;
+      color: #38bdf8;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      height: 55px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>☁️ 十種雲形 リアルタイム対戦かるた ☁️</h1>
+  </header>
+
+  <!-- 入室画面 -->
+  <div id="login-screen">
+    <div class="form-group">
+      <label for="room-id">部屋名（例：1、半角英数字のみ）</label>
+      <input type="text" id="room-id" value="1" placeholder="部屋の名前を入力">
+    </div>
+    <div class="form-group">
+      <label for="passcode">パスコード</label>
+      <input type="password" id="passcode" value="1234" placeholder="合言葉">
+    </div>
+    <div class="form-group">
+      <label for="player-name">あなたの名前</label>
+      <input type="text" id="player-name" placeholder="例：たろう">
+    </div>
+    <button id="join-btn" onclick="joinRoom()">部屋に入る</button>
+  </div>
+
+  <!-- ゲーム画面 -->
+  <div id="game-screen">
+    <div class="game-header">
+      <div class="room-info">部屋: <span id="display-room"></span> <span id="host-badge" style="font-size: 0.75rem; color: #0284c7;"></span></div>
+      <button id="start-btn" onclick="startGame()" style="width: auto; padding: 6px 15px; display: none;">ゲームスタート！</button>
+    </div>
+
+    <div class="scoreboard" id="scoreboard"></div>
+    <div id="otetsuki-banner">🚫 あなたはお手つき中です！（他のプレイヤーが正解するか、全員が誤答するまで選択できません）</div>
+
+    <div class="yomi-box">
+      <div class="yomi-text" id="yomi-text">「ゲームスタート！」を押して開始してください</div>
+      <button class="sound-btn" onclick="speakCurrentCard()">🔊 もう一度聞く</button>
+    </div>
+
+    <div class="cards-grid" id="cards-grid"></div>
+    <div class="log-box" id="log-box">> 接続中...</div>
+  </div>
+</div>
+
+<script>
+  // 十種雲形データ＋SVGデザイン
+  const CLOUD_DATA = [
+    { id: 'ci', name: '巻雲（すじ雲）', text: '最高に高い空に浮かぶ、ハケでかいたような細いすじ状の白い雲。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#38bdf8"/><path d="M10,20 Q40,10 80,30 M20,50 Q60,35 90,60 M15,80 Q50,70 75,95" stroke="#ffffff" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.9"/></svg>` },
+    { id: 'cc', name: '巻積雲（うろこ雲）', text: '高い空に小さな白い雲のつぶが規則正しく並ぶ、魚のうろこのような雲。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#0284c7"/><g fill="#ffffff" opacity="0.85"><circle cx="20" cy="20" r="4"/><circle cx="40" cy="18" r="4"/><circle cx="60" cy="22" r="4"/><circle cx="80" cy="19" r="4"/><circle cx="30" cy="40" r="4"/><circle cx="50" cy="38" r="4"/><circle cx="70" cy="42" r="4"/><circle cx="20" cy="60" r="4"/><circle cx="40" cy="58" r="4"/><circle cx="60" cy="62" r="4"/><circle cx="80" cy="60" r="4"/></g></svg>` },
+    { id: 'cs', name: '巻層雲（うす雲）', text: '空全体を薄いベールのように覆い、太陽のまわりに光の輪（ハロー）ができる雲。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#7dd3fc"/><circle cx="50" cy="50" r="16" fill="#fef08a"/><circle cx="50" cy="50" r="32" fill="none" stroke="#ffffff" stroke-width="2.5" opacity="0.8"/><rect width="100" height="133" fill="#ffffff" opacity="0.25"/></svg>` },
+    { id: 'ac', name: '高積雲（ひつじ雲）', text: '中くらいの高さに浮かぶ、羊の群れのように小石状の雲が集まった雲。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#0369a1"/><g fill="#ffffff" opacity="0.9"><ellipse cx="25" cy="25" rx="8" ry="6"/><ellipse cx="55" cy="30" rx="9" ry="6"/><ellipse cx="80" cy="22" rx="7" ry="5"/><ellipse cx="35" cy="55" rx="10" ry="7"/><ellipse cx="68" cy="58" rx="9" ry="6"/><ellipse cx="20" cy="85" rx="9" ry="6"/><ellipse cx="50" cy="88" rx="10" ry="7"/></g></svg>` },
+    { id: 'as', name: '高層雲（おぼろ雲）', text: '空全体を灰色の膜で覆い、太陽やすりガラス越しのようにぼんやり見える雲。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#94a3b8"/><circle cx="50" cy="45" r="14" fill="#fef08a" opacity="0.6"/><rect width="100" height="133" fill="#cbd5e1" opacity="0.5"/></svg>` },
+    { id: 'sc', name: '層積雲（うね雲）', text: '低い空に大きな灰色の雲の固まりが波やうねりのように広がる雲。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#64748b"/><g fill="#94a3b8"><rect x="0" y="20" width="100" height="18" rx="8"/><rect x="0" y="50" width="100" height="20" rx="9"/><rect x="0" y="85" width="100" height="22" rx="10"/></g></svg>` },
+    { id: 'st', name: '層雲（きり雲）', text: '最も低い場所に均一に広がる霧のような雲。山にかかることもある。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#cbd5e1"/><path d="M0,60 Q50,55 100,60 L100,133 L0,133 Z" fill="#e2e8f0" opacity="0.9"/></svg>` },
+    { id: 'ns', name: '乱層雲（あま雲）', text: '空全体を厚く暗い灰色で覆い、長時間しとしとと雨や雪を降らせる雲。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#475569"/><g stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="2,4"><line x1="20" y1="70" x2="15" y2="120"/><line x1="40" y1="70" x2="35" y2="120"/><line x1="60" y1="70" x2="55" y2="120"/><line x1="80" y1="70" x2="75" y2="120"/></g></svg>` },
+    { id: 'cu', name: '積雲（わた雲）', text: '晴れた日の青空に、底が平らで上部がモコモコと盛り上がる綿あめのような雲。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#38bdf8"/><path d="M20,70 Q20,50 35,50 Q45,35 60,40 Q75,40 80,55 Q90,60 85,75 Z" fill="#ffffff"/></svg>` },
+    { id: 'cb', name: '積乱雲（入道雲）', text: '巨大なタワーのように上空へ伸び、激しい雨や雷、つむじ風をもたらす雲。', svg: `<svg viewBox="0 0 100 133"><rect width="100" height="133" fill="#1e293b"/><path d="M15,35 Q15,20 40,20 Q50,15 70,20 Q85,20 85,35 L75,90 L25,90 Z" fill="#e2e8f0"/><polygon points="45,90 55,90 40,110 52,110 35,130" fill="#facc15"/></svg>` }
+  ];
+
+  let peer = null;
+  let connections = []; // ホスト用：クライアント接続リスト
+  let hostConn = null;  // クライアント用：ホストとの接続
+  let isHost = false;
+  let myName = '';
+  
+  let gameState = {
+    started: false,
+    currentCardIndex: -1,
+    takenCards: {},    // cardId: playerName
+    otetsukiList: [],  // お手つき中のプレイヤーリスト
+    deck: [],
+    scores: {}         // playerName: score
+  };
+
+  // 効果音（Web Audio API）
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  function playSound(type) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    if (type === 'correct') {
+      osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+      osc.frequency.setValueAtTime(659.25, audioCtx.currentTime + 0.1); // E5
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.25);
+    } else if (type === 'wrong') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(180, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+    }
+  }
+
+  // 1. 部屋に入室する
+  function joinRoom() {
+    const room = document.getElementById('room-id').value.trim();
+    const pass = document.getElementById('passcode').value.trim();
+    myName = document.getElementById('player-name').value.trim();
+
+    if (!room || !pass || !myName) {
+      alert('すべての項目を入力してください！');
+      return;
+    }
+
+    document.getElementById('join-btn').disabled = true;
+    document.getElementById('join-btn').innerText = '接続中...';
+
+    const targetRoomId = `cloud-karuta-${room}-${pass}`;
+
+    // まず自分が「ホスト」になれるか試す
+    peer = new Peer(targetRoomId);
+
+    peer.on('open', (id) => {
+      // 成功したら自分がホスト（部屋作成者）
+      isHost = true;
+      document.getElementById('host-badge').innerText = '（あなたがホスト）';
+      document.getElementById('start-btn').style.display = 'block';
+      gameState.scores[myName] = 0;
+      setupGameUI(room);
+      appendLog(`> 部屋を作成しました。他の参加者を待っています。`);
+    });
+
+    peer.on('connection', (conn) => {
+      // クライアントからの接続を受ける（ホスト処理）
+      connections.push(conn);
+      conn.on('data', (data) => handleHostReceiveData(data, conn));
+      conn.on('close', () => {
+        connections = connections.filter(c => c !== conn);
+      });
+    });
+
+    peer.on('error', (err) => {
+      // 部屋IDがすでに使われている場合は「クライアント」として接続
+      if (err.type === 'unavailable-id') {
+        isHost = false;
+        peer = new Peer(); // ランダムIDで自身のPeerを作成
+        peer.on('open', () => {
+          hostConn = peer.connect(targetRoomId);
+          hostConn.on('open', () => {
+            setupGameUI(room);
+            hostConn.send({ type: 'JOIN', name: myName });
+          });
+          hostConn.on('data', handleClientReceiveData);
+        });
+      } else {
+        alert('接続エラーが発生しました: ' + err.type);
+        document.getElementById('join-btn').disabled = false;
+        document.getElementById('join-btn').innerText = '部屋に入る';
+      }
+    });
+  }
+
+  function setupGameUI(room) {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('game-screen').style.display = 'block';
+    document.getElementById('display-room').innerText = room;
+    renderCards();
+  }
+
+  // 2. ホスト側の受信処理
+  function handleHostReceiveData(data, conn) {
+    if (data.type === 'JOIN') {
+      if (!gameState.scores.hasOwnProperty(data.name)) {
+        gameState.scores[data.name] = 0;
+      }
+      appendLog(`> ${data.name} さんが入室しました。`);
+      broadcastState();
+    } 
+    else if (data.type === 'TAKE_CARD') {
+      processCardTake(data.cardId, data.playerName);
+    }
+  }
+
+  // 3. クライアント側の受信処理
+  function handleClientReceiveData(data) {
+    if (data.type === 'SYNC') {
+      gameState = data.gameState;
+      renderScoreboard();
+      renderCards();
+      updateYomiBox();
+      if (data.action === 'START') speakCurrentCard();
+      if (data.action === 'CORRECT') playSound('correct');
+      if (data.action === 'WRONG') playSound('wrong');
+    }
+    else if (data.type === 'LOG') {
+      appendLog(data.msg);
+    }
+  }
+
+  // ホストが全員に最新情報を一括送信（ブロードキャスト）
+  function broadcastState(action = '') {
+    const payload = { type: 'SYNC', gameState, action };
+    connections.forEach(conn => conn.send(payload));
+    // ホスト自身も描画更新
+    renderScoreboard();
+    renderCards();
+    updateYomiBox();
+  }
+
+  // 4. ゲーム開始（ホストのみ）
+  function startGame() {
+    if (!isHost) return;
+    const deck = [...Array(CLOUD_DATA.length).keys()].sort(() => Math.random() - 0.5);
+    gameState = {
+      started: true,
+      currentCardIndex: 0,
+      takenCards: {},
+      otetsukiList: [],
+      deck: deck,
+      scores: gameState.scores
+    };
+    Object.keys(gameState.scores).forEach(p => gameState.scores[p] = 0);
+
+    broadcastState('START');
+    speakCurrentCard();
+    appendLog(`> ゲームをスタートしました！`);
+  }
+
+  // 5. 早押し・お手つき判定（ホストが処理）
+  function processCardTake(cardId, playerName) {
+    if (!gameState.started || gameState.otetsukiList.includes(playerName)) return;
+
+    const currentCorrectIndex = gameState.deck[gameState.currentCardIndex];
+    const correctCard = CLOUD_DATA[currentCorrectIndex];
+
+    if (cardId === correctCard.id) {
+      // 正解処理
+      gameState.takenCards[cardId] = playerName;
+      gameState.scores[playerName] = (gameState.scores[playerName] || 0) + 1;
+      gameState.otetsukiList = []; // お手つき解除
+      
+      playSound('correct');
+      appendLog(`> 🎯 【${correctCard.name}】を ${playerName} さんが獲得！`);
+      broadcastState('CORRECT');
+
+      setTimeout(() => {
+        if (gameState.currentCardIndex < CLOUD_DATA.length - 1) {
+          gameState.currentCardIndex++;
+          broadcastState('NEXT');
+          speakCurrentCard();
+        } else {
+          appendLog(`> 🏆 すべての札が取られました！ゲーム終了です。`);
+          document.getElementById('yomi-text').innerText = '🎉 ゲーム終了！';
+        }
+      }, 1500);
+
+    } else {
+      // お手つき（誤答）処理
+      if (!gameState.otetsukiList.includes(playerName)) {
+        gameState.otetsukiList.push(playerName);
+      }
+      playSound('wrong');
+      appendLog(`> ⚠️ ${playerName} さんがお手つき！`);
+
+      // 全員がお手つきしたかチェック
+      const totalPlayers = Object.keys(gameState.scores).length;
+      if (gameState.otetsukiList.length >= totalPlayers) {
+        appendLog(`> ⚠️ 全員お手つき！正解は【${correctCard.name}】でした。`);
+        gameState.takenCards[correctCard.id] = '全員ミス';
+        gameState.otetsukiList = []; // 全員のお手つき解除
+
+        broadcastState('WRONG');
+
+        setTimeout(() => {
+          if (gameState.currentCardIndex < CLOUD_DATA.length - 1) {
+            gameState.currentCardIndex++;
+            broadcastState('NEXT');
+            speakCurrentCard();
+          } else {
+            appendLog(`> 🏆 ゲーム終了です。`);
+          }
+        }, 2000);
+      } else {
+        broadcastState('WRONG');
+      }
+    }
+  }
+
+  // 6. カードをタップした時の処理
+  function takeCard(cardId) {
+    if (!gameState.started) return;
+    if (gameState.otetsukiList.includes(myName)) return;
+
+    if (isHost) {
+      processCardTake(cardId, myName);
+    } else if (hostConn) {
+      hostConn.send({ type: 'TAKE_CARD', cardId, playerName: myName });
+    }
+  }
+
+  // 画面描画
+  function renderCards() {
+    const grid = document.getElementById('cards-grid');
+    grid.innerHTML = '';
+
+    const isOtetsuki = gameState.otetsukiList.includes(myName);
+    document.getElementById('otetsuki-banner').style.display = isOtetsuki ? 'block' : 'none';
+
+    CLOUD_DATA.forEach((card) => {
+      const isTaken = gameState.takenCards[card.id];
+      const cardEl = document.createElement('div');
+      cardEl.className = `karuta-card ${isTaken ? 'taken' : ''} ${isOtetsuki ? 'locked' : ''}`;
+      
+      cardEl.innerHTML = `
+        <div class="card-visual">${card.svg}</div>
+        <div class="card-title">${card.name}</div>
+      `;
+
+      if (!isTaken && gameState.started && !isOtetsuki) {
+        cardEl.onclick = () => takeCard(card.id);
+      }
+
+      grid.appendChild(cardEl);
+    });
+  }
+
+  function renderScoreboard() {
+    const board = document.getElementById('scoreboard');
+    board.innerHTML = '';
+    Object.keys(gameState.scores).forEach(name => {
+      const isOtetsuki = gameState.otetsukiList.includes(name);
+      const card = document.createElement('div');
+      card.className = `player-card ${name === myName ? 'active' : ''} ${isOtetsuki ? 'otetsuki' : ''}`;
+      card.innerHTML = `
+        <span>${name} ${isOtetsuki ? '🚫' : ''}</span>
+        <span class="score-badge">${gameState.scores[name]}</span>
+      `;
+      board.appendChild(card);
+    });
+  }
+
+  function updateYomiBox() {
+    if (!gameState.started || gameState.currentCardIndex < 0) return;
+    const cardIndex = gameState.deck[gameState.currentCardIndex];
+    const currentCard = CLOUD_DATA[cardIndex];
+    document.getElementById('yomi-text').innerText = `「 ${currentCard.text} 」`;
+  }
+
+  function speakCurrentCard() {
+    if (!gameState.started || gameState.currentCardIndex < 0) return;
+    const cardIndex = gameState.deck[gameState.currentCardIndex];
+    const currentCard = CLOUD_DATA[cardIndex];
+
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const uttr = new SpeechSynthesisUtterance(currentCard.text);
+      uttr.lang = 'ja-JP';
+      uttr.rate = 0.9;
+      window.speechSynthesis.speak(uttr);
+    }
+  }
+
+  function appendLog(msg) {
+    const logBox = document.getElementById('log-box');
+    logBox.innerHTML += `<div>${msg}</div>`;
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+</script>
+</body>
+</html>
